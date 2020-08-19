@@ -1,8 +1,7 @@
+#include "ByteBuffer.h"
 #include "Limelight-internal.h"
 #include "PlatformSockets.h"
 #include "PlatformThreads.h"
-
-#include "ByteBuffer.h"
 
 #include <enet/enet.h>
 
@@ -17,34 +16,34 @@ typedef struct _NVCTL_ENET_PACKET_HEADER {
 } NVCTL_ENET_PACKET_HEADER, *PNVCTL_ENET_PACKET_HEADER;
 
 typedef struct _QUEUED_FRAME_INVALIDATION_TUPLE {
-    int startFrame;
-    int endFrame;
+    int                         startFrame;
+    int                         endFrame;
     LINKED_BLOCKING_QUEUE_ENTRY entry;
 } QUEUED_FRAME_INVALIDATION_TUPLE, *PQUEUED_FRAME_INVALIDATION_TUPLE;
 
-static SOCKET ctlSock = INVALID_SOCKET;
-static ENetHost* client;
-static ENetPeer* peer;
+static SOCKET    ctlSock = INVALID_SOCKET;
+static ENetHost *client;
+static ENetPeer *peer;
 static PLT_MUTEX enetMutex;
-static int usePeriodicPing;
+static int       usePeriodicPing;
 
 static PLT_THREAD lossStatsThread;
 static PLT_THREAD invalidateRefFramesThread;
 static PLT_THREAD controlReceiveThread;
-static PLT_EVENT invalidateRefFramesEvent;
-static int lossCountSinceLastReport;
-static long lastGoodFrame;
-static long lastSeenFrame;
-static int stopping;
-static int disconnectPending;
+static PLT_EVENT  invalidateRefFramesEvent;
+static int        lossCountSinceLastReport;
+static long       lastGoodFrame;
+static long       lastSeenFrame;
+static int        stopping;
+static int        disconnectPending;
 
-static int intervalGoodFrameCount;
-static int intervalTotalFrameCount;
+static int      intervalGoodFrameCount;
+static int      intervalTotalFrameCount;
 static uint64_t intervalStartTimeMs;
-static int lastIntervalLossPercentage;
-static int lastConnectionStatusUpdate;
+static int      lastIntervalLossPercentage;
+static int      lastConnectionStatusUpdate;
 
-static int idrFrameRequired;
+static int                   idrFrameRequired;
 static LINKED_BLOCKING_QUEUE invalidReferenceFrameTuples;
 
 #define CONN_IMMEDIATE_POOR_LOSS_RATE 30
@@ -64,108 +63,96 @@ static LINKED_BLOCKING_QUEUE invalidReferenceFrameTuples;
 #define CONTROL_STREAM_TIMEOUT_SEC 10
 
 static const short packetTypesGen3[] = {
-    0x1407, // Request IDR frame
-    0x1410, // Start B
-    0x1404, // Invalidate reference frames
-    0x140c, // Loss Stats
-    0x1417, // Frame Stats (unused)
-    -1,     // Input data (unused)
-    -1,     // Rumble data (unused)
-    -1,     // Termination (unused)
+    0x1407,    // Request IDR frame
+    0x1410,    // Start B
+    0x1404,    // Invalidate reference frames
+    0x140c,    // Loss Stats
+    0x1417,    // Frame Stats (unused)
+    -1,        // Input data (unused)
+    -1,        // Rumble data (unused)
+    -1,        // Termination (unused)
 };
 static const short packetTypesGen4[] = {
-    0x0606, // Request IDR frame
-    0x0609, // Start B
-    0x0604, // Invalidate reference frames
-    0x060a, // Loss Stats
-    0x0611, // Frame Stats (unused)
-    -1,     // Input data (unused)
-    -1,     // Rumble data (unused)
-    -1,     // Termination (unused)
+    0x0606,    // Request IDR frame
+    0x0609,    // Start B
+    0x0604,    // Invalidate reference frames
+    0x060a,    // Loss Stats
+    0x0611,    // Frame Stats (unused)
+    -1,        // Input data (unused)
+    -1,        // Rumble data (unused)
+    -1,        // Termination (unused)
 };
 static const short packetTypesGen5[] = {
-    0x0305, // Start A
-    0x0307, // Start B
-    0x0301, // Invalidate reference frames
-    0x0201, // Loss Stats
-    0x0204, // Frame Stats (unused)
-    0x0207, // Input data
-    -1,     // Rumble data (unused)
-    -1,     // Termination (unused)
+    0x0305,    // Start A
+    0x0307,    // Start B
+    0x0301,    // Invalidate reference frames
+    0x0201,    // Loss Stats
+    0x0204,    // Frame Stats (unused)
+    0x0207,    // Input data
+    -1,        // Rumble data (unused)
+    -1,        // Termination (unused)
 };
 static const short packetTypesGen7[] = {
-    0x0305, // Start A
-    0x0307, // Start B
-    0x0301, // Invalidate reference frames
-    0x0201, // Loss Stats
-    0x0204, // Frame Stats (unused)
-    0x0206, // Input data
-    0x010b, // Rumble data
-    0x0100, // Termination
+    0x0305,    // Start A
+    0x0307,    // Start B
+    0x0301,    // Invalidate reference frames
+    0x0201,    // Loss Stats
+    0x0204,    // Frame Stats (unused)
+    0x0206,    // Input data
+    0x010b,    // Rumble data
+    0x0100,    // Termination
 };
 
-static const char requestIdrFrameGen3[] = { 0, 0 };
-static const int startBGen3[] = { 0, 0, 0, 0xa };
+static const char requestIdrFrameGen3[] = {0, 0};
+static const int  startBGen3[]          = {0, 0, 0, 0xa};
 
-static const char requestIdrFrameGen4[] = { 0, 0 };
-static const char startBGen4[] = { 0 };
+static const char requestIdrFrameGen4[] = {0, 0};
+static const char startBGen4[]          = {0};
 
-static const char startAGen5[] = { 0, 0 };
-static const char startBGen5[] = { 0 };
+static const char startAGen5[] = {0, 0};
+static const char startBGen5[] = {0};
 
 static const short payloadLengthsGen3[] = {
-    sizeof(requestIdrFrameGen3), // Request IDR frame
-    sizeof(startBGen3), // Start B
-    24, // Invalidate reference frames
-    32, // Loss Stats
-    64, // Frame Stats
-    -1, // Input data
+    sizeof(requestIdrFrameGen3),    // Request IDR frame
+    sizeof(startBGen3),             // Start B
+    24,                             // Invalidate reference frames
+    32,                             // Loss Stats
+    64,                             // Frame Stats
+    -1,                             // Input data
 };
 static const short payloadLengthsGen4[] = {
-    sizeof(requestIdrFrameGen4), // Request IDR frame
-    sizeof(startBGen4), // Start B
-    24, // Invalidate reference frames
-    32, // Loss Stats
-    64, // Frame Stats
-    -1, // Input data
+    sizeof(requestIdrFrameGen4),    // Request IDR frame
+    sizeof(startBGen4),             // Start B
+    24,                             // Invalidate reference frames
+    32,                             // Loss Stats
+    64,                             // Frame Stats
+    -1,                             // Input data
 };
 static const short payloadLengthsGen5[] = {
-    sizeof(startAGen5), // Start A
-    sizeof(startBGen5), // Start B
-    24, // Invalidate reference frames
-    32, // Loss Stats
-    80, // Frame Stats
-    -1, // Input data
+    sizeof(startAGen5),    // Start A
+    sizeof(startBGen5),    // Start B
+    24,                    // Invalidate reference frames
+    32,                    // Loss Stats
+    80,                    // Frame Stats
+    -1,                    // Input data
 };
 static const short payloadLengthsGen7[] = {
-    sizeof(startAGen5), // Start A
-    sizeof(startBGen5), // Start B
-    24, // Invalidate reference frames
-    32, // Loss Stats
-    80, // Frame Stats
-    -1, // Input data
+    sizeof(startAGen5),    // Start A
+    sizeof(startBGen5),    // Start B
+    24,                    // Invalidate reference frames
+    32,                    // Loss Stats
+    80,                    // Frame Stats
+    -1,                    // Input data
 };
 
-static const char* preconstructedPayloadsGen3[] = {
-    requestIdrFrameGen3,
-    (char*)startBGen3
-};
-static const char* preconstructedPayloadsGen4[] = {
-    requestIdrFrameGen4,
-    startBGen4
-};
-static const char* preconstructedPayloadsGen5[] = {
-    startAGen5,
-    startBGen5
-};
-static const char* preconstructedPayloadsGen7[] = {
-    startAGen5,
-    startBGen5
-};
+static const char *preconstructedPayloadsGen3[] = {requestIdrFrameGen3, (char *)startBGen3};
+static const char *preconstructedPayloadsGen4[] = {requestIdrFrameGen4, startBGen4};
+static const char *preconstructedPayloadsGen5[] = {startAGen5, startBGen5};
+static const char *preconstructedPayloadsGen7[] = {startAGen5, startBGen5};
 
-static short* packetTypes;
-static short* payloadLengths;
-static char**preconstructedPayloads;
+static short *packetTypes;
+static short *payloadLengths;
+static char **preconstructedPayloads;
 
 #define LOSS_REPORT_INTERVAL_MS 50
 #define PERIODIC_PING_INTERVAL_MS 250
@@ -178,39 +165,34 @@ int initializeControlStream(void) {
     PltCreateMutex(&enetMutex);
 
     if (AppVersionQuad[0] == 3) {
-        packetTypes = (short*)packetTypesGen3;
-        payloadLengths = (short*)payloadLengthsGen3;
-        preconstructedPayloads = (char**)preconstructedPayloadsGen3;
-    }
-    else if (AppVersionQuad[0] == 4) {
-        packetTypes = (short*)packetTypesGen4;
-        payloadLengths = (short*)payloadLengthsGen4;
-        preconstructedPayloads = (char**)preconstructedPayloadsGen4;
-    }
-    else if (AppVersionQuad[0] == 5) {
-        packetTypes = (short*)packetTypesGen5;
-        payloadLengths = (short*)payloadLengthsGen5;
-        preconstructedPayloads = (char**)preconstructedPayloadsGen5;
-    }
-    else {
-        packetTypes = (short*)packetTypesGen7;
-        payloadLengths = (short*)payloadLengthsGen7;
-        preconstructedPayloads = (char**)preconstructedPayloadsGen7;
+        packetTypes            = (short *)packetTypesGen3;
+        payloadLengths         = (short *)payloadLengthsGen3;
+        preconstructedPayloads = (char **)preconstructedPayloadsGen3;
+    } else if (AppVersionQuad[0] == 4) {
+        packetTypes            = (short *)packetTypesGen4;
+        payloadLengths         = (short *)payloadLengthsGen4;
+        preconstructedPayloads = (char **)preconstructedPayloadsGen4;
+    } else if (AppVersionQuad[0] == 5) {
+        packetTypes            = (short *)packetTypesGen5;
+        payloadLengths         = (short *)payloadLengthsGen5;
+        preconstructedPayloads = (char **)preconstructedPayloadsGen5;
+    } else {
+        packetTypes            = (short *)packetTypesGen7;
+        payloadLengths         = (short *)payloadLengthsGen7;
+        preconstructedPayloads = (char **)preconstructedPayloadsGen7;
     }
 
-    idrFrameRequired = 0;
-    lastGoodFrame = 0;
-    lastSeenFrame = 0;
-    lossCountSinceLastReport = 0;
-    disconnectPending = 0;
-    intervalGoodFrameCount = 0;
-    intervalTotalFrameCount = 0;
-    intervalStartTimeMs = 0;
+    idrFrameRequired           = 0;
+    lastGoodFrame              = 0;
+    lastSeenFrame              = 0;
+    lossCountSinceLastReport   = 0;
+    disconnectPending          = 0;
+    intervalGoodFrameCount     = 0;
+    intervalTotalFrameCount    = 0;
+    intervalStartTimeMs        = 0;
     lastIntervalLossPercentage = 0;
     lastConnectionStatusUpdate = CONN_STATUS_OKAY;
-    usePeriodicPing = (AppVersionQuad[0] > 7) ||
-            (AppVersionQuad[0] == 7 && AppVersionQuad[1] > 1) ||
-            (AppVersionQuad[0] == 7 && AppVersionQuad[1] == 1 && AppVersionQuad[2] >= 415);
+    usePeriodicPing            = (AppVersionQuad[0] > 7) || (AppVersionQuad[0] == 7 && AppVersionQuad[1] > 1) || (AppVersionQuad[0] == 7 && AppVersionQuad[1] == 1 && AppVersionQuad[2] >= 415);
 
     return 0;
 }
@@ -233,31 +215,29 @@ void destroyControlStream(void) {
     PltDeleteMutex(&enetMutex);
 }
 
-int getNextFrameInvalidationTuple(PQUEUED_FRAME_INVALIDATION_TUPLE* qfit) {
-    int err = LbqPollQueueElement(&invalidReferenceFrameTuples, (void**)qfit);
+int getNextFrameInvalidationTuple(PQUEUED_FRAME_INVALIDATION_TUPLE *qfit) {
+    int err = LbqPollQueueElement(&invalidReferenceFrameTuples, (void **)qfit);
     return (err == LBQ_SUCCESS);
 }
 
 void queueFrameInvalidationTuple(int startFrame, int endFrame) {
     LC_ASSERT(startFrame <= endFrame);
-    
+
     if (isReferenceFrameInvalidationEnabled()) {
         PQUEUED_FRAME_INVALIDATION_TUPLE qfit;
         qfit = malloc(sizeof(*qfit));
         if (qfit != NULL) {
             qfit->startFrame = startFrame;
-            qfit->endFrame = endFrame;
+            qfit->endFrame   = endFrame;
             if (LbqOfferQueueItem(&invalidReferenceFrameTuples, qfit, &qfit->entry) == LBQ_BOUND_EXCEEDED) {
                 // Too many invalidation tuples, so we need an IDR frame now
                 free(qfit);
                 idrFrameRequired = 1;
             }
-        }
-        else {
+        } else {
             idrFrameRequired = 1;
         }
-    }
-    else {
+    } else {
         idrFrameRequired = 1;
     }
 
@@ -287,15 +267,12 @@ void connectionSawFrame(int frameIndex) {
         if (intervalTotalFrameCount != 0) {
             // Notify the client of connection status changes based on frame loss rate
             int frameLossPercent = 100 - (intervalGoodFrameCount * 100) / intervalTotalFrameCount;
-            if (lastConnectionStatusUpdate != CONN_STATUS_POOR &&
-                    (frameLossPercent >= CONN_IMMEDIATE_POOR_LOSS_RATE ||
-                     (frameLossPercent >= CONN_CONSECUTIVE_POOR_LOSS_RATE && lastIntervalLossPercentage >= CONN_CONSECUTIVE_POOR_LOSS_RATE))) {
+            if (lastConnectionStatusUpdate != CONN_STATUS_POOR && (frameLossPercent >= CONN_IMMEDIATE_POOR_LOSS_RATE || (frameLossPercent >= CONN_CONSECUTIVE_POOR_LOSS_RATE && lastIntervalLossPercentage >= CONN_CONSECUTIVE_POOR_LOSS_RATE))) {
                 // We require 2 consecutive intervals above CONN_CONSECUTIVE_POOR_LOSS_RATE or a single
                 // interval above CONN_IMMEDIATE_POOR_LOSS_RATE to notify of a poor connection.
                 ListenerCallbacks.connectionStatusUpdate(CONN_STATUS_POOR);
                 lastConnectionStatusUpdate = CONN_STATUS_POOR;
-            }
-            else if (frameLossPercent <= CONN_OKAY_LOSS_RATE && lastConnectionStatusUpdate != CONN_STATUS_OKAY) {
+            } else if (frameLossPercent <= CONN_OKAY_LOSS_RATE && lastConnectionStatusUpdate != CONN_STATUS_OKAY) {
                 ListenerCallbacks.connectionStatusUpdate(CONN_STATUS_OKAY);
                 lastConnectionStatusUpdate = CONN_STATUS_OKAY;
             }
@@ -304,7 +281,7 @@ void connectionSawFrame(int frameIndex) {
         }
 
         // Reset interval
-        intervalStartTimeMs = now;
+        intervalStartTimeMs    = now;
         intervalGoodFrameCount = intervalTotalFrameCount = 0;
     }
 
@@ -319,23 +296,19 @@ void connectionLostPackets(int lastReceivedPacket, int nextReceivedPacket) {
 
 // Reads an NV control stream packet from the TCP connection
 static PNVCTL_TCP_PACKET_HEADER readNvctlPacketTcp(void) {
-    NVCTL_TCP_PACKET_HEADER staticHeader;
+    NVCTL_TCP_PACKET_HEADER  staticHeader;
     PNVCTL_TCP_PACKET_HEADER fullPacket;
-    SOCK_RET err;
+    SOCK_RET                 err;
 
-    err = recv(ctlSock, (char*)&staticHeader, sizeof(staticHeader), 0);
-    if (err != sizeof(staticHeader)) {
-        return NULL;
-    }
+    err = recv(ctlSock, (char *)&staticHeader, sizeof(staticHeader), 0);
+    if (err != sizeof(staticHeader)) { return NULL; }
 
     fullPacket = (PNVCTL_TCP_PACKET_HEADER)malloc(staticHeader.payloadLength + sizeof(staticHeader));
-    if (fullPacket == NULL) {
-        return NULL;
-    }
+    if (fullPacket == NULL) { return NULL; }
 
     memcpy(fullPacket, &staticHeader, sizeof(staticHeader));
     if (staticHeader.payloadLength != 0) {
-        err = recv(ctlSock, (char*)(fullPacket + 1), staticHeader.payloadLength, 0);
+        err = recv(ctlSock, (char *)(fullPacket + 1), staticHeader.payloadLength, 0);
         if (err != staticHeader.payloadLength) {
             free(fullPacket);
             return NULL;
@@ -345,19 +318,17 @@ static PNVCTL_TCP_PACKET_HEADER readNvctlPacketTcp(void) {
     return fullPacket;
 }
 
-static int sendMessageEnet(short ptype, short paylen, const void* payload) {
+static int sendMessageEnet(short ptype, short paylen, const void *payload) {
     PNVCTL_ENET_PACKET_HEADER packet;
-    ENetPacket* enetPacket;
-    int err;
+    ENetPacket *              enetPacket;
+    int                       err;
 
     LC_ASSERT(AppVersionQuad[0] >= 5);
 
     enetPacket = enet_packet_create(NULL, sizeof(*packet) + paylen, ENET_PACKET_FLAG_RELIABLE);
-    if (enetPacket == NULL) {
-        return 0;
-    }
+    if (enetPacket == NULL) { return 0; }
 
-    packet = (PNVCTL_ENET_PACKET_HEADER)enetPacket->data;
+    packet       = (PNVCTL_ENET_PACKET_HEADER)enetPacket->data;
     packet->type = ptype;
     memcpy(&packet[1], payload, paylen);
 
@@ -369,7 +340,7 @@ static int sendMessageEnet(short ptype, short paylen, const void* payload) {
         enet_packet_destroy(enetPacket);
         return 0;
     }
-    
+
     PltLockMutex(&enetMutex);
     enet_host_flush(client);
     PltUnlockMutex(&enetMutex);
@@ -377,64 +348,52 @@ static int sendMessageEnet(short ptype, short paylen, const void* payload) {
     return 1;
 }
 
-static int sendMessageTcp(short ptype, short paylen, const void* payload) {
+static int sendMessageTcp(short ptype, short paylen, const void *payload) {
     PNVCTL_TCP_PACKET_HEADER packet;
-    SOCK_RET err;
+    SOCK_RET                 err;
 
     LC_ASSERT(AppVersionQuad[0] < 5);
 
     packet = malloc(sizeof(*packet) + paylen);
-    if (packet == NULL) {
-        return 0;
-    }
+    if (packet == NULL) { return 0; }
 
-    packet->type = ptype;
+    packet->type          = ptype;
     packet->payloadLength = paylen;
     memcpy(&packet[1], payload, paylen);
 
-    err = send(ctlSock, (char*) packet, sizeof(*packet) + paylen, 0);
+    err = send(ctlSock, (char *)packet, sizeof(*packet) + paylen, 0);
     free(packet);
 
-    if (err != sizeof(*packet) + paylen) {
-        return 0;
-    }
+    if (err != sizeof(*packet) + paylen) { return 0; }
 
     return 1;
 }
 
-static int sendMessageAndForget(short ptype, short paylen, const void* payload) {
+static int sendMessageAndForget(short ptype, short paylen, const void *payload) {
     int ret;
 
     // Unlike regular sockets, ENet sockets aren't safe to invoke from multiple
     // threads at once. We have to synchronize them with a lock.
     if (AppVersionQuad[0] >= 5) {
         ret = sendMessageEnet(ptype, paylen, payload);
-    }
-    else {
+    } else {
         ret = sendMessageTcp(ptype, paylen, payload);
     }
 
     return ret;
 }
 
-static int sendMessageAndDiscardReply(short ptype, short paylen, const void* payload) {
+static int sendMessageAndDiscardReply(short ptype, short paylen, const void *payload) {
     if (AppVersionQuad[0] >= 5) {
-        if (!sendMessageEnet(ptype, paylen, payload)) {
-            return 0;
-        }
-    }
-    else {
+        if (!sendMessageEnet(ptype, paylen, payload)) { return 0; }
+    } else {
         PNVCTL_TCP_PACKET_HEADER reply;
 
-        if (!sendMessageTcp(ptype, paylen, payload)) {
-            return 0;
-        }
+        if (!sendMessageTcp(ptype, paylen, payload)) { return 0; }
 
         // Discard the response
         reply = readNvctlPacketTcp();
-        if (reply == NULL) {
-            return 0;
-        }
+        if (reply == NULL) { return 0; }
 
         free(reply);
     }
@@ -445,17 +404,15 @@ static int sendMessageAndDiscardReply(short ptype, short paylen, const void* pay
 // This intercept function drops disconnect events to allow us to process
 // pending receives first. It works around what appears to be a bug in ENet
 // where pending disconnects can cause loss of unprocessed received data.
-static int ignoreDisconnectIntercept(ENetHost* host, ENetEvent* event) {
+static int ignoreDisconnectIntercept(ENetHost *host, ENetEvent *event) {
     if (host->receivedDataLength == sizeof(ENetProtocolHeader) + sizeof(ENetProtocolDisconnect)) {
-        ENetProtocolHeader* protoHeader = (ENetProtocolHeader*)host->receivedData;
-        ENetProtocolDisconnect* disconnect = (ENetProtocolDisconnect*)(protoHeader + 1);
+        ENetProtocolHeader *    protoHeader = (ENetProtocolHeader *)host->receivedData;
+        ENetProtocolDisconnect *disconnect  = (ENetProtocolDisconnect *)(protoHeader + 1);
 
         if ((disconnect->header.command & ENET_PROTOCOL_COMMAND_MASK) == ENET_PROTOCOL_COMMAND_DISCONNECT) {
             Limelog("ENet disconnect event pending\n");
             disconnectPending = 1;
-            if (event) {
-                event->type = ENET_EVENT_TYPE_NONE;
-            }
+            if (event) { event->type = ENET_EVENT_TYPE_NONE; }
             return 1;
         }
     }
@@ -463,13 +420,11 @@ static int ignoreDisconnectIntercept(ENetHost* host, ENetEvent* event) {
     return 0;
 }
 
-static void controlReceiveThreadFunc(void* context) {
+static void controlReceiveThreadFunc(void *context) {
     int err;
 
     // This is only used for ENet
-    if (AppVersionQuad[0] < 5) {
-        return;
-    }
+    if (AppVersionQuad[0] < 5) { return; }
 
     while (!PltIsThreadInterrupted(&controlReceiveThread)) {
         ENetEvent event;
@@ -497,8 +452,7 @@ static void controlReceiveThreadFunc(void* context) {
                         client->intercept = NULL;
                         PltUnlockMutex(&enetMutex);
                         continue;
-                    }
-                    else {
+                    } else {
                         // The 1 second timeout has expired with no disconnect event
                         // retransmission after the first notification. We can only
                         // assume the server died tragically, so go ahead and tear down.
@@ -507,12 +461,10 @@ static void controlReceiveThreadFunc(void* context) {
                         ListenerCallbacks.connectionTerminated(-1);
                         return;
                     }
-                }
-                else {
+                } else {
                     PltUnlockMutex(&enetMutex);
                 }
-            }
-            else {
+            } else {
                 // No events ready - sleep for a short time
                 //
                 // NOTE: This sleep *directly* impacts the lowest possible retransmission
@@ -541,28 +493,27 @@ static void controlReceiveThreadFunc(void* context) {
             if (ctlHdr->type == packetTypes[IDX_RUMBLE_DATA]) {
                 BYTE_BUFFER bb;
 
-                BbInitializeWrappedBuffer(&bb, (char*)event.packet->data, sizeof(*ctlHdr), event.packet->dataLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
+                BbInitializeWrappedBuffer(&bb, (char *)event.packet->data, sizeof(*ctlHdr), event.packet->dataLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
                 BbAdvanceBuffer(&bb, 4);
 
                 unsigned short controllerNumber;
                 unsigned short lowFreqRumble;
                 unsigned short highFreqRumble;
 
-                BbGetShort(&bb, (short*)&controllerNumber);
-                BbGetShort(&bb, (short*)&lowFreqRumble);
-                BbGetShort(&bb, (short*)&highFreqRumble);
+                BbGetShort(&bb, (short *)&controllerNumber);
+                BbGetShort(&bb, (short *)&lowFreqRumble);
+                BbGetShort(&bb, (short *)&highFreqRumble);
 
                 ListenerCallbacks.rumble(controllerNumber, lowFreqRumble, highFreqRumble);
-            }
-            else if (ctlHdr->type == packetTypes[IDX_TERMINATION]) {
+            } else if (ctlHdr->type == packetTypes[IDX_TERMINATION]) {
                 BYTE_BUFFER bb;
 
-                BbInitializeWrappedBuffer(&bb, (char*)event.packet->data, sizeof(*ctlHdr), event.packet->dataLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
+                BbInitializeWrappedBuffer(&bb, (char *)event.packet->data, sizeof(*ctlHdr), event.packet->dataLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
 
                 unsigned short terminationReason;
-                int terminationErrorCode;
+                int            terminationErrorCode;
 
-                BbGetShort(&bb, (short*)&terminationReason);
+                BbGetShort(&bb, (short *)&terminationReason);
 
                 Limelog("Server notified termination reason: 0x%04x\n", terminationReason);
 
@@ -570,8 +521,7 @@ static void controlReceiveThreadFunc(void* context) {
                 if (terminationReason == 0x0100) {
                     // Pass error code 0 to notify the client that this was not an error
                     terminationErrorCode = ML_ERROR_GRACEFUL_TERMINATION;
-                }
-                else {
+                } else {
                     // Otherwise pass the reason unmodified
                     terminationErrorCode = terminationReason;
                 }
@@ -587,8 +537,7 @@ static void controlReceiveThreadFunc(void* context) {
             }
 
             enet_packet_destroy(event.packet);
-        }
-        else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
+        } else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
             Limelog("Control stream received unexpected disconnect event\n");
             ListenerCallbacks.connectionTerminated(-1);
             return;
@@ -596,15 +545,15 @@ static void controlReceiveThreadFunc(void* context) {
     }
 }
 
-static void lossStatsThreadFunc(void* context) {
+static void lossStatsThreadFunc(void *context) {
     BYTE_BUFFER byteBuffer;
 
     if (usePeriodicPing) {
         char periodicPingPayload[8];
 
         BbInitializeWrappedBuffer(&byteBuffer, periodicPingPayload, 0, sizeof(periodicPingPayload), BYTE_ORDER_LITTLE);
-        BbPutShort(&byteBuffer, 4); // Length of payload
-        BbPutInt(&byteBuffer, 0); // Timestamp?
+        BbPutShort(&byteBuffer, 4);    // Length of payload
+        BbPutInt(&byteBuffer, 0);      // Timestamp?
 
         while (!PltIsThreadInterrupted(&lossStatsThread)) {
             // Send the message (and don't expect a response)
@@ -617,9 +566,8 @@ static void lossStatsThreadFunc(void* context) {
             // Wait a bit
             PltSleepMsInterruptible(&lossStatsThread, PERIODIC_PING_INTERVAL_MS);
         }
-    }
-    else {
-        char* lossStatsPayload;
+    } else {
+        char *lossStatsPayload;
 
         lossStatsPayload = malloc(payloadLengths[IDX_LOSS_STATS]);
         if (lossStatsPayload == NULL) {
@@ -640,8 +588,7 @@ static void lossStatsThreadFunc(void* context) {
             BbPutInt(&byteBuffer, 0x14);
 
             // Send the message (and don't expect a response)
-            if (!sendMessageAndForget(packetTypes[IDX_LOSS_STATS],
-                payloadLengths[IDX_LOSS_STATS], lossStatsPayload)) {
+            if (!sendMessageAndForget(packetTypes[IDX_LOSS_STATS], payloadLengths[IDX_LOSS_STATS], lossStatsPayload)) {
                 free(lossStatsPayload);
                 Limelog("Loss Stats: Transaction failed: %d\n", (int)LastSocketError());
                 ListenerCallbacks.connectionTerminated(LastSocketFail());
@@ -667,8 +614,7 @@ static void requestIdrFrame(void) {
         if (lastSeenFrame < 0x20) {
             payload[0] = 0;
             payload[1] = lastSeenFrame;
-        }
-        else {
+        } else {
             payload[0] = lastSeenFrame - 0x20;
             payload[1] = lastSeenFrame;
         }
@@ -676,17 +622,14 @@ static void requestIdrFrame(void) {
         payload[2] = 0;
 
         // Send the reference frame invalidation request and read the response
-        if (!sendMessageAndDiscardReply(packetTypes[IDX_INVALIDATE_REF_FRAMES],
-            payloadLengths[IDX_INVALIDATE_REF_FRAMES], payload)) {
+        if (!sendMessageAndDiscardReply(packetTypes[IDX_INVALIDATE_REF_FRAMES], payloadLengths[IDX_INVALIDATE_REF_FRAMES], payload)) {
             Limelog("Request IDR Frame: Transaction failed: %d\n", (int)LastSocketError());
             ListenerCallbacks.connectionTerminated(LastSocketFail());
             return;
         }
-    }
-    else {
+    } else {
         // Send IDR frame request and read the response
-        if (!sendMessageAndDiscardReply(packetTypes[IDX_REQUEST_IDR_FRAME],
-            payloadLengths[IDX_REQUEST_IDR_FRAME], preconstructedPayloads[IDX_REQUEST_IDR_FRAME])) {
+        if (!sendMessageAndDiscardReply(packetTypes[IDX_REQUEST_IDR_FRAME], payloadLengths[IDX_REQUEST_IDR_FRAME], preconstructedPayloads[IDX_REQUEST_IDR_FRAME])) {
             Limelog("Request IDR Frame: Transaction failed: %d\n", (int)LastSocketError());
             ListenerCallbacks.connectionTerminated(LastSocketFail());
             return;
@@ -697,14 +640,12 @@ static void requestIdrFrame(void) {
 }
 
 static void requestInvalidateReferenceFrames(void) {
-    long long payload[3];
+    long long                        payload[3];
     PQUEUED_FRAME_INVALIDATION_TUPLE qfit;
 
     LC_ASSERT(isReferenceFrameInvalidationEnabled());
 
-    if (!getNextFrameInvalidationTuple(&qfit)) {
-        return;
-    }
+    if (!getNextFrameInvalidationTuple(&qfit)) { return; }
 
     LC_ASSERT(qfit->startFrame <= qfit->endFrame);
 
@@ -720,8 +661,7 @@ static void requestInvalidateReferenceFrames(void) {
     } while (getNextFrameInvalidationTuple(&qfit));
 
     // Send the reference frame invalidation request and read the response
-    if (!sendMessageAndDiscardReply(packetTypes[IDX_INVALIDATE_REF_FRAMES],
-        payloadLengths[IDX_INVALIDATE_REF_FRAMES], payload)) {
+    if (!sendMessageAndDiscardReply(packetTypes[IDX_INVALIDATE_REF_FRAMES], payloadLengths[IDX_INVALIDATE_REF_FRAMES], payload)) {
         Limelog("Request Invaldiate Reference Frames: Transaction failed: %d\n", (int)LastSocketError());
         ListenerCallbacks.connectionTerminated(LastSocketFail());
         return;
@@ -730,30 +670,25 @@ static void requestInvalidateReferenceFrames(void) {
     Limelog("Invalidate reference frame request sent (%d to %d)\n", (int)payload[0], (int)payload[1]);
 }
 
-static void invalidateRefFramesFunc(void* context) {
+static void invalidateRefFramesFunc(void *context) {
     while (!PltIsThreadInterrupted(&invalidateRefFramesThread)) {
         // Wait for a request to invalidate reference frames
         PltWaitForEvent(&invalidateRefFramesEvent);
         PltClearEvent(&invalidateRefFramesEvent);
-        
+
         // Bail if we've been shutdown
-        if (stopping) {
-            break;
-        }
+        if (stopping) { break; }
 
         // Sometimes we absolutely need an IDR frame
         if (idrFrameRequired) {
             // Empty invalidate reference frames tuples
             PQUEUED_FRAME_INVALIDATION_TUPLE qfit;
-            while (getNextFrameInvalidationTuple(&qfit)) {
-                free(qfit);
-            }
+            while (getNextFrameInvalidationTuple(&qfit)) { free(qfit); }
 
             // Send an IDR frame request
             idrFrameRequired = 0;
             requestIdrFrame();
-        }
-        else {
+        } else {
             // Otherwise invalidate reference frames
             requestInvalidateReferenceFrames();
         }
@@ -769,10 +704,8 @@ int stopControlStream(void) {
     // This must be set to stop in a timely manner
     LC_ASSERT(ConnectionInterrupted);
 
-    if (ctlSock != INVALID_SOCKET) {
-        shutdownTcpSocket(ctlSock);
-    }
-    
+    if (ctlSock != INVALID_SOCKET) { shutdownTcpSocket(ctlSock); }
+
     PltInterruptThread(&lossStatsThread);
     PltInterruptThread(&invalidateRefFramesThread);
     PltInterruptThread(&controlReceiveThread);
@@ -795,7 +728,7 @@ int stopControlStream(void) {
         enet_host_destroy(client);
         client = NULL;
     }
-    
+
     if (ctlSock != INVALID_SOCKET) {
         closeSocket(ctlSock);
         ctlSock = INVALID_SOCKET;
@@ -805,13 +738,11 @@ int stopControlStream(void) {
 }
 
 // Called by the input stream to send a packet for Gen 5+ servers
-int sendInputPacketOnControlStream(unsigned char* data, int length) {
+int sendInputPacketOnControlStream(unsigned char *data, int length) {
     LC_ASSERT(AppVersionQuad[0] >= 5);
 
     // Send the input data (no reply expected)
-    if (sendMessageAndForget(packetTypes[IDX_INPUT_DATA], length, data) == 0) {
-        return -1;
-    }
+    if (sendMessageAndForget(packetTypes[IDX_INPUT_DATA], length, data) == 0) { return -1; }
 
     return 0;
 }
@@ -822,10 +753,10 @@ int startControlStream(void) {
 
     if (AppVersionQuad[0] >= 5) {
         ENetAddress address;
-        ENetEvent event;
-        
+        ENetEvent   event;
+
         enet_address_set_address(&address, (struct sockaddr *)&RemoteAddr, RemoteAddrLen);
-        enet_address_set_port(&address, 47999);
+        enet_address_set_port(&address, ServerInfo.portUdp1);
 
         // Create a client that can use 1 outgoing connection and 1 channel
         client = enet_host_create(address.address.ss_family, NULL, 1, 1, 0, 0);
@@ -846,9 +777,12 @@ int startControlStream(void) {
         }
 
         // Wait for the connect to complete
-        if (serviceEnetHost(client, &event, CONTROL_STREAM_TIMEOUT_SEC * 1000) <= 0 ||
-            event.type != ENET_EVENT_TYPE_CONNECT) {
-            Limelog("Failed to connect to UDP port 47999\n");
+        if (serviceEnetHost(client, &event, CONTROL_STREAM_TIMEOUT_SEC * 1000) <= 0 || event.type != ENET_EVENT_TYPE_CONNECT) {
+            char logStr[64] = "Failed to connect to UDP port ", logPort[6];
+            itoa(ServerInfo.portUdp1, logPort, 10);
+            strcat(logStr, logPort);
+            strcat(logStr, "\n");
+            Limelog(logStr);
             stopping = 1;
             enet_peer_reset(peer);
             peer = NULL;
@@ -859,13 +793,11 @@ int startControlStream(void) {
 
         // Ensure the connect verify ACK is sent immediately
         enet_host_flush(client);
-        
+
         // Set the max peer timeout to 10 seconds
         enet_peer_timeout(peer, ENET_PEER_TIMEOUT_LIMIT, ENET_PEER_TIMEOUT_MINIMUM, 10000);
-    }
-    else {
-        ctlSock = connectTcpSocket(&RemoteAddr, RemoteAddrLen,
-            47995, CONTROL_STREAM_TIMEOUT_SEC);
+    } else {
+        ctlSock = connectTcpSocket(&RemoteAddr, RemoteAddrLen, 47995, CONTROL_STREAM_TIMEOUT_SEC);
         if (ctlSock == INVALID_SOCKET) {
             stopping = 1;
             return LastSocketFail();
@@ -880,8 +812,7 @@ int startControlStream(void) {
         if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
-        }
-        else {
+        } else {
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
             enet_host_destroy(client);
@@ -891,17 +822,14 @@ int startControlStream(void) {
     }
 
     // Send START A
-    if (!sendMessageAndDiscardReply(packetTypes[IDX_START_A],
-        payloadLengths[IDX_START_A],
-        preconstructedPayloads[IDX_START_A])) {
+    if (!sendMessageAndDiscardReply(packetTypes[IDX_START_A], payloadLengths[IDX_START_A], preconstructedPayloads[IDX_START_A])) {
         Limelog("Start A failed: %d\n", (int)LastSocketError());
-        err = LastSocketFail();
+        err      = LastSocketFail();
         stopping = 1;
 
         if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
-        }
-        else {
+        } else {
             ConnectionInterrupted = 1;
         }
 
@@ -912,8 +840,7 @@ int startControlStream(void) {
         if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
-        }
-        else {
+        } else {
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
             enet_host_destroy(client);
@@ -923,17 +850,14 @@ int startControlStream(void) {
     }
 
     // Send START B
-    if (!sendMessageAndDiscardReply(packetTypes[IDX_START_B],
-        payloadLengths[IDX_START_B],
-        preconstructedPayloads[IDX_START_B])) {
+    if (!sendMessageAndDiscardReply(packetTypes[IDX_START_B], payloadLengths[IDX_START_B], preconstructedPayloads[IDX_START_B])) {
         Limelog("Start B failed: %d\n", (int)LastSocketError());
-        err = LastSocketFail();
+        err      = LastSocketFail();
         stopping = 1;
 
         if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
-        }
-        else {
+        } else {
             ConnectionInterrupted = 1;
         }
 
@@ -944,8 +868,7 @@ int startControlStream(void) {
         if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
-        }
-        else {
+        } else {
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
             enet_host_destroy(client);
@@ -960,8 +883,7 @@ int startControlStream(void) {
 
         if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
-        }
-        else {
+        } else {
             ConnectionInterrupted = 1;
         }
 
@@ -972,8 +894,7 @@ int startControlStream(void) {
         if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
-        }
-        else {
+        } else {
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
             enet_host_destroy(client);
@@ -988,8 +909,7 @@ int startControlStream(void) {
 
         if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
-        }
-        else {
+        } else {
             ConnectionInterrupted = 1;
         }
 
@@ -1004,8 +924,7 @@ int startControlStream(void) {
         if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
-        }
-        else {
+        } else {
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
             enet_host_destroy(client);

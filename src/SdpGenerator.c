@@ -6,10 +6,10 @@
 #define MAX_SDP_TAIL_LEN 128
 
 typedef struct _SDP_OPTION {
-    char name[MAX_OPTION_NAME_LEN + 1];
-    void* payload;
-    int payloadLen;
-    struct _SDP_OPTION* next;
+    char                name[MAX_OPTION_NAME_LEN + 1];
+    void *              payload;
+    int                 payloadLen;
+    struct _SDP_OPTION *next;
 } SDP_OPTION, *PSDP_OPTION;
 
 // Cleanup the attribute list
@@ -25,7 +25,7 @@ static void freeAttributeList(PSDP_OPTION head) {
 // Get the size of the attribute list
 static int getSerializedAttributeListSize(PSDP_OPTION head) {
     PSDP_OPTION currentEntry = head;
-    size_t size = 0;
+    size_t      size         = 0;
     while (currentEntry != NULL) {
         size += strlen("a=");
         size += strlen(currentEntry->name);
@@ -39,9 +39,9 @@ static int getSerializedAttributeListSize(PSDP_OPTION head) {
 }
 
 // Populate the serialized attribute list into a string
-static int fillSerializedAttributeList(char* buffer, PSDP_OPTION head) {
+static int fillSerializedAttributeList(char *buffer, PSDP_OPTION head) {
     PSDP_OPTION currentEntry = head;
-    int offset = 0;
+    int         offset       = 0;
     while (currentEntry != NULL) {
         offset += sprintf(&buffer[offset], "a=%s:", currentEntry->name);
         memcpy(&buffer[offset], currentEntry->payload, currentEntry->payloadLen);
@@ -54,28 +54,23 @@ static int fillSerializedAttributeList(char* buffer, PSDP_OPTION head) {
 }
 
 // Add an attribute
-static int addAttributeBinary(PSDP_OPTION* head, char* name, const void* payload, int payloadLen) {
+static int addAttributeBinary(PSDP_OPTION *head, char *name, const void *payload, int payloadLen) {
     PSDP_OPTION option, currentOption;
 
     option = malloc(sizeof(*option) + payloadLen);
-    if (option == NULL) {
-        return -1;
-    }
+    if (option == NULL) { return -1; }
 
-    option->next = NULL;
+    option->next       = NULL;
     option->payloadLen = payloadLen;
     strcpy(option->name, name);
-    option->payload = (void*)(option + 1);
+    option->payload = (void *)(option + 1);
     memcpy(option->payload, payload, payloadLen);
 
     if (*head == NULL) {
         *head = option;
-    }
-    else {
+    } else {
         currentOption = *head;
-        while (currentOption->next != NULL) {
-            currentOption = currentOption->next;
-        }
+        while (currentOption->next != NULL) { currentOption = currentOption->next; }
         currentOption->next = option;
     }
 
@@ -83,41 +78,32 @@ static int addAttributeBinary(PSDP_OPTION* head, char* name, const void* payload
 }
 
 // Add an attribute string
-static int addAttributeString(PSDP_OPTION* head, char* name, const char* payload) {
+static int addAttributeString(PSDP_OPTION *head, char *name, const char *payload) {
     // We purposefully omit the null terminating character
     return addAttributeBinary(head, name, payload, (int)strlen(payload));
 }
 
-static int addGen3Options(PSDP_OPTION* head, char* addrStr) {
+static int addGen3Options(PSDP_OPTION *head, char *addrStr) {
     int payloadInt;
     int err = 0;
 
     err |= addAttributeString(head, "x-nv-general.serverAddress", addrStr);
 
     payloadInt = htonl(0x42774141);
-    err |= addAttributeBinary(head,
-        "x-nv-general.featureFlags", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-general.featureFlags", &payloadInt, sizeof(payloadInt));
 
     payloadInt = htonl(0x41514141);
-    err |= addAttributeBinary(head,
-        "x-nv-video[0].transferProtocol", &payloadInt, sizeof(payloadInt));
-    err |= addAttributeBinary(head,
-        "x-nv-video[1].transferProtocol", &payloadInt, sizeof(payloadInt));
-    err |= addAttributeBinary(head,
-        "x-nv-video[2].transferProtocol", &payloadInt, sizeof(payloadInt));
-    err |= addAttributeBinary(head,
-        "x-nv-video[3].transferProtocol", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-video[0].transferProtocol", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-video[1].transferProtocol", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-video[2].transferProtocol", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-video[3].transferProtocol", &payloadInt, sizeof(payloadInt));
 
     payloadInt = htonl(0x42414141);
-    err |= addAttributeBinary(head,
-        "x-nv-video[0].rateControlMode", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-video[0].rateControlMode", &payloadInt, sizeof(payloadInt));
     payloadInt = htonl(0x42514141);
-    err |= addAttributeBinary(head,
-        "x-nv-video[1].rateControlMode", &payloadInt, sizeof(payloadInt));
-    err |= addAttributeBinary(head,
-        "x-nv-video[2].rateControlMode", &payloadInt, sizeof(payloadInt));
-    err |= addAttributeBinary(head,
-        "x-nv-video[3].rateControlMode", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-video[1].rateControlMode", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-video[2].rateControlMode", &payloadInt, sizeof(payloadInt));
+    err |= addAttributeBinary(head, "x-nv-video[3].rateControlMode", &payloadInt, sizeof(payloadInt));
 
     err |= addAttributeString(head, "x-nv-vqos[0].bw.flags", "14083");
 
@@ -129,30 +115,31 @@ static int addGen3Options(PSDP_OPTION* head, char* addrStr) {
     return err;
 }
 
-static int addGen4Options(PSDP_OPTION* head, char* addrStr) {
+static int addGen4Options(PSDP_OPTION *head, char *addrStr) {
     char payloadStr[92];
-    int err = 0;
+    int  err = 0;
 
-    sprintf(payloadStr, "rtsp://%s:48010", addrStr);
+    char tempStr[64] = "rtsp://%s:", tempPort[6];
+    itoa(ServerInfo.portBoth0, tempPort, 10);
+    strcat(tempStr, tempPort);
+    sprintf(payloadStr, tempStr, addrStr);
     err |= addAttributeString(head, "x-nv-general.serverAddress", payloadStr);
 
     return err;
 }
 
-static int addGen5Options(PSDP_OPTION* head) {
+static int addGen5Options(PSDP_OPTION *head) {
     int err = 0;
 
     // We want to use the new ENet connections for control and input
     err |= addAttributeString(head, "x-nv-general.useReliableUdp", "1");
     err |= addAttributeString(head, "x-nv-ri.useControlChannel", "1");
-    
+
     // Disable dynamic resolution switching
     err |= addAttributeString(head, "x-nv-vqos[0].drc.enable", "0");
 
     // When streaming 4K, lower FEC levels to reduce stream overhead
-    if (StreamConfig.width >= 3840 && StreamConfig.height >= 2160) {
-        err |= addAttributeString(head, "x-nv-vqos[0].fec.repairPercent", "5");
-    }
+    if (StreamConfig.width >= 3840 && StreamConfig.height >= 2160) { err |= addAttributeString(head, "x-nv-vqos[0].fec.repairPercent", "5"); }
 
     // Recovery mode can cause the FEC percentage to change mid-frame, which
     // breaks many assumptions in RTP FEC queue.
@@ -161,19 +148,19 @@ static int addGen5Options(PSDP_OPTION* head) {
     return err;
 }
 
-static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
+static PSDP_OPTION getAttributesList(char *urlSafeAddr) {
     PSDP_OPTION optionHead;
-    char payloadStr[92];
-    int audioChannelCount;
-    int audioChannelMask;
-    int err;
-    int bitrate;
+    char        payloadStr[92];
+    int         audioChannelCount;
+    int         audioChannelMask;
+    int         err;
+    int         bitrate;
 
     // This must have been resolved to either local or remote by now
     LC_ASSERT(StreamConfig.streamingRemotely != STREAM_CFG_AUTO);
 
     optionHead = NULL;
-    err = 0;
+    err        = 0;
 
     sprintf(payloadStr, "%d", StreamConfig.width);
     err |= addAttributeString(&optionHead, "x-nv-video[0].clientViewportWd", payloadStr);
@@ -201,11 +188,8 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
 
         // Subtract 500 Kbps to leave room for audio and control. On remote streams,
         // GFE will use 96Kbps stereo audio. For local streams, it will choose 512Kbps.
-        if (bitrate > 500) {
-            bitrate -= 500;
-        }
-    }
-    else {
+        if (bitrate > 500) { bitrate -= 500; }
+    } else {
         bitrate = StreamConfig.bitrate;
     }
 
@@ -229,8 +213,7 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
 
         err |= addAttributeString(&optionHead, "x-nv-vqos[0].bw.minimumBitrateKbps", payloadStr);
         err |= addAttributeString(&optionHead, "x-nv-vqos[0].bw.maximumBitrateKbps", payloadStr);
-    }
-    else {
+    } else {
         if (StreamConfig.streamingRemotely == STREAM_CFG_REMOTE) {
             err |= addAttributeString(&optionHead, "x-nv-video[0].averageBitrate", "4");
             err |= addAttributeString(&optionHead, "x-nv-video[0].peakBitrate", "4");
@@ -240,10 +223,10 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         err |= addAttributeString(&optionHead, "x-nv-vqos[0].bw.minimumBitrate", payloadStr);
         err |= addAttributeString(&optionHead, "x-nv-vqos[0].bw.maximumBitrate", payloadStr);
     }
-    
+
     // FEC must be enabled for proper packet sequencing to be done by RTP FEC queue
     err |= addAttributeString(&optionHead, "x-nv-vqos[0].fec.enable", "1");
-    
+
     err |= addAttributeString(&optionHead, "x-nv-vqos[0].videoQualityScoreUpdateTime", "5000");
 
     // Enable DSCP marking to hopefully increase QoS priority
@@ -252,16 +235,14 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
 
     if (AppVersionQuad[0] == 3) {
         err |= addGen3Options(&optionHead, urlSafeAddr);
-    }
-    else if (AppVersionQuad[0] == 4) {
+    } else if (AppVersionQuad[0] == 4) {
         err |= addGen4Options(&optionHead, urlSafeAddr);
-    }
-    else {
+    } else {
         err |= addGen5Options(&optionHead);
     }
 
     audioChannelCount = CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration);
-    audioChannelMask = CHANNEL_MASK_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration);
+    audioChannelMask  = CHANNEL_MASK_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration);
 
     if (AppVersionQuad[0] >= 4) {
         unsigned char slicesPerFrame;
@@ -283,24 +264,19 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
                 // Enable HDR if requested
                 if (StreamConfig.enableHdr) {
                     err |= addAttributeString(&optionHead, "x-nv-video[0].dynamicRangeMode", "1");
-                }
-                else {
+                } else {
                     err |= addAttributeString(&optionHead, "x-nv-video[0].dynamicRangeMode", "0");
                 }
             }
 
-            if (AppVersionQuad[0] < 7 ||
-                (AppVersionQuad[0] == 7 && AppVersionQuad[1] < 1) ||
-                (AppVersionQuad[0] == 7 && AppVersionQuad[1] == 1 && AppVersionQuad[2] < 408)) {
+            if (AppVersionQuad[0] < 7 || (AppVersionQuad[0] == 7 && AppVersionQuad[1] < 1) || (AppVersionQuad[0] == 7 && AppVersionQuad[1] == 1 && AppVersionQuad[2] < 408)) {
                 // This disables split frame encode on GFE 3.10 which seems to produce broken
                 // HEVC output at 1080p60 (full of artifacts even on the SHIELD itself, go figure).
                 // It now appears to work fine on GFE 3.14.1.
                 Limelog("Disabling split encode for HEVC on older GFE version");
                 err |= addAttributeString(&optionHead, "x-nv-video[0].encoderFeatureSetting", "0");
             }
-        }
-        else {
-            
+        } else {
             err |= addAttributeString(&optionHead, "x-nv-clientSupportHevc", "0");
             err |= addAttributeString(&optionHead, "x-nv-vqos[0].bitStreamFormat", "0");
 
@@ -318,8 +294,7 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         if (AppVersionQuad[0] >= 7) {
             if (isReferenceFrameInvalidationEnabled()) {
                 err |= addAttributeString(&optionHead, "x-nv-video[0].maxNumReferenceFrames", "0");
-            }
-            else {
+            } else {
                 // Restrict the video stream to 1 reference frame if we're not using
                 // reference frame invalidation. This helps to improve compatibility with
                 // some decoders that don't like the default of having 16 reference frames.
@@ -336,16 +311,14 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         err |= addAttributeString(&optionHead, "x-nv-audio.surround.channelMask", payloadStr);
         if (audioChannelCount > 2) {
             err |= addAttributeString(&optionHead, "x-nv-audio.surround.enable", "1");
-        }
-        else {
+        } else {
             err |= addAttributeString(&optionHead, "x-nv-audio.surround.enable", "0");
         }
     }
 
     if (AppVersionQuad[0] >= 7) {
         // Decide to use HQ audio based on the original video bitrate, not the HEVC-adjusted value
-        if (OriginalVideoBitrate >= HIGH_AUDIO_BITRATE_THRESHOLD && audioChannelCount > 2 &&
-                HighQualitySurroundSupported && (AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) == 0) {
+        if (OriginalVideoBitrate >= HIGH_AUDIO_BITRATE_THRESHOLD && audioChannelCount > 2 && HighQualitySurroundSupported && (AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) == 0) {
             // Enable high quality mode for surround sound
             err |= addAttributeString(&optionHead, "x-nv-audio.surround.AudioQuality", "1");
 
@@ -355,21 +328,17 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
 
             // Use 5 ms frames since we don't have a slow decoder
             AudioPacketDuration = 5;
-        }
-        else {
+        } else {
             err |= addAttributeString(&optionHead, "x-nv-audio.surround.AudioQuality", "0");
             HighQualitySurroundEnabled = 0;
 
             if ((AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) != 0) {
                 // Use 20 ms packets for slow decoders to save CPU time
                 AudioPacketDuration = 20;
-            }
-            else if ((AudioCallbacks.capabilities & CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION) != 0 &&
-                      OriginalVideoBitrate < LOW_AUDIO_BITRATE_TRESHOLD) {
+            } else if ((AudioCallbacks.capabilities & CAPABILITY_SUPPORTS_ARBITRARY_AUDIO_DURATION) != 0 && OriginalVideoBitrate < LOW_AUDIO_BITRATE_TRESHOLD) {
                 // Use 10 ms packets for slow networks to balance latency and bandwidth usage
                 AudioPacketDuration = 10;
-            }
-            else {
+            } else {
                 // Use 5 ms packets by default for lowest latency
                 AudioPacketDuration = 5;
             }
@@ -377,8 +346,7 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
 
         sprintf(payloadStr, "%d", AudioPacketDuration);
         err |= addAttributeString(&optionHead, "x-nv-aqos.packetDuration", payloadStr);
-    }
-    else {
+    } else {
         // 5 ms duration for legacy servers
         AudioPacketDuration = 5;
 
@@ -391,49 +359,44 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         err |= addAttributeString(&optionHead, "x-nv-video[0].encoderCscMode", payloadStr);
     }
 
-    if (err == 0) {
-        return optionHead;
-    }
+    if (err == 0) { return optionHead; }
 
     freeAttributeList(optionHead);
     return NULL;
 }
 
 // Populate the SDP header with required information
-static int fillSdpHeader(char* buffer, int rtspClientVersion, char*urlSafeAddr) {
+static int fillSdpHeader(char *buffer, int rtspClientVersion, char *urlSafeAddr) {
     return sprintf(buffer,
-        "v=0\r\n"
-        "o=android 0 %d IN %s %s\r\n"
-        "s=NVIDIA Streaming Client\r\n",
-        rtspClientVersion,
-        RemoteAddr.ss_family == AF_INET ? "IPv4" : "IPv6",
-        urlSafeAddr);
+                   "v=0\r\n"
+                   "o=android 0 %d IN %s %s\r\n"
+                   "s=NVIDIA Streaming Client\r\n",
+                   rtspClientVersion,
+                   RemoteAddr.ss_family == AF_INET ? "IPv4" : "IPv6",
+                   urlSafeAddr);
 }
 
 // Populate the SDP tail with required information
-static int fillSdpTail(char* buffer) {
+static int fillSdpTail(char *buffer) {
     return sprintf(buffer,
-        "t=0 0\r\n"
-        "m=video %d  \r\n",
-        AppVersionQuad[0] < 4 ? 47996 : 47998);
+                   "t=0 0\r\n"
+                   "m=video %d  \r\n",
+                   AppVersionQuad[0] < 4 ? 47996 : ServerInfo.portUdp0);
 }
 
 // Get the SDP attributes for the stream config
-char* getSdpPayloadForStreamConfig(int rtspClientVersion, int* length) {
+char *getSdpPayloadForStreamConfig(int rtspClientVersion, int *length) {
     PSDP_OPTION attributeList;
-    int offset;
-    char* payload;
-    char urlSafeAddr[URLSAFESTRING_LEN];
+    int         offset;
+    char *      payload;
+    char        urlSafeAddr[URLSAFESTRING_LEN];
 
     addrToUrlSafeString(&RemoteAddr, urlSafeAddr);
 
     attributeList = getAttributesList(urlSafeAddr);
-    if (attributeList == NULL) {
-        return NULL;
-    }
+    if (attributeList == NULL) { return NULL; }
 
-    payload = malloc(MAX_SDP_HEADER_LEN + MAX_SDP_TAIL_LEN +
-        getSerializedAttributeListSize(attributeList));
+    payload = malloc(MAX_SDP_HEADER_LEN + MAX_SDP_TAIL_LEN + getSerializedAttributeListSize(attributeList));
     if (payload == NULL) {
         freeAttributeList(attributeList);
         return NULL;

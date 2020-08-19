@@ -1,13 +1,13 @@
 #include "Limelight-internal.h"
+#include "LinkedBlockingQueue.h"
 #include "PlatformSockets.h"
 #include "PlatformThreads.h"
-#include "LinkedBlockingQueue.h"
 #include "RtpReorderQueue.h"
 
 static SOCKET rtpSocket = INVALID_SOCKET;
 
 static LINKED_BLOCKING_QUEUE packetQueue;
-static RTP_REORDER_QUEUE rtpReorderQueue;
+static RTP_REORDER_QUEUE     rtpReorderQueue;
 
 static PLT_THREAD udpPingThread;
 static PLT_THREAD receiveThread;
@@ -17,7 +17,7 @@ static unsigned short lastSeq;
 
 static int receivedDataFromPeer;
 
-#define RTP_PORT 48000
+//#define RTP_PORT 48000
 
 #define MAX_PACKET_SIZE 1400
 
@@ -32,7 +32,7 @@ typedef struct _QUEUED_AUDIO_PACKET {
 
     int size;
     union {
-        RTP_QUEUE_ENTRY rentry;
+        RTP_QUEUE_ENTRY             rentry;
         LINKED_BLOCKING_QUEUE_ENTRY lentry;
     } q;
 } QUEUED_AUDIO_PACKET, *PQUEUED_AUDIO_PACKET;
@@ -41,7 +41,7 @@ typedef struct _QUEUED_AUDIO_PACKET {
 void initializeAudioStream(void) {
     LbqInitializeLinkedBlockingQueue(&packetQueue, 30);
     RtpqInitializeQueue(&rtpReorderQueue, RTPQ_DEFAULT_MAX_SIZE, RTPQ_DEFAULT_QUEUE_TIME);
-    lastSeq = 0;
+    lastSeq              = 0;
     receivedDataFromPeer = 0;
 }
 
@@ -64,18 +64,18 @@ void destroyAudioStream(void) {
     RtpqCleanupQueue(&rtpReorderQueue);
 }
 
-static void UdpPingThreadProc(void* context) {
+static void UdpPingThreadProc(void *context) {
     // Ping in ASCII
-    char pingData[] = { 0x50, 0x49, 0x4E, 0x47 };
+    char                pingData[] = {0x50, 0x49, 0x4E, 0x47};
     struct sockaddr_in6 saddr;
-    SOCK_RET err;
+    SOCK_RET            err;
 
     memcpy(&saddr, &RemoteAddr, sizeof(saddr));
-    saddr.sin6_port = htons(RTP_PORT);
+    saddr.sin6_port = htons(ServerInfo.portUdp2);
 
     // Send PING every second until we get data back then every 5 seconds after that.
     while (!PltIsThreadInterrupted(&udpPingThread)) {
-        err = sendto(rtpSocket, pingData, sizeof(pingData), 0, (struct sockaddr*)&saddr, RemoteAddrLen);
+        err = sendto(rtpSocket, pingData, sizeof(pingData), 0, (struct sockaddr *)&saddr, RemoteAddrLen);
         if (err != sizeof(pingData)) {
             Limelog("Audio Ping: sendto() failed: %d\n", (int)LastSocketError());
             ListenerCallbacks.connectionTerminated(LastSocketFail());
@@ -86,19 +86,17 @@ static void UdpPingThreadProc(void* context) {
     }
 }
 
-static int queuePacketToLbq(PQUEUED_AUDIO_PACKET* packet) {
+static int queuePacketToLbq(PQUEUED_AUDIO_PACKET *packet) {
     int err;
 
     err = LbqOfferQueueItem(&packetQueue, *packet, &(*packet)->q.lentry);
     if (err == LBQ_SUCCESS) {
         // The LBQ owns the buffer now
         *packet = NULL;
-    }
-    else if (err == LBQ_BOUND_EXCEEDED) {
+    } else if (err == LBQ_BOUND_EXCEEDED) {
         Limelog("Audio packet queue overflow\n");
         freePacketList(LbqFlushQueueItems(&packetQueue));
-    }
-    else if (err == LBQ_INTERRUPTED) {
+    } else if (err == LBQ_INTERRUPTED) {
         return 0;
     }
 
@@ -117,24 +115,23 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
 
     lastSeq = rtp->sequenceNumber;
 
-    AudioCallbacks.decodeAndPlaySample((char*)(rtp + 1), packet->size - sizeof(*rtp));
+    AudioCallbacks.decodeAndPlaySample((char *)(rtp + 1), packet->size - sizeof(*rtp));
 }
 
-static void ReceiveThreadProc(void* context) {
-    PRTP_PACKET rtp;
+static void ReceiveThreadProc(void *context) {
+    PRTP_PACKET          rtp;
     PQUEUED_AUDIO_PACKET packet;
-    int queueStatus;
-    int useSelect;
-    int packetsToDrop = 500 / AudioPacketDuration;
-    int waitingForAudioMs;
+    int                  queueStatus;
+    int                  useSelect;
+    int                  packetsToDrop = 500 / AudioPacketDuration;
+    int                  waitingForAudioMs;
 
     packet = NULL;
 
     if (setNonFatalRecvTimeoutMs(rtpSocket, UDP_RECV_POLL_TIMEOUT_MS) < 0) {
         // SO_RCVTIMEO failed, so use select() to wait
         useSelect = 1;
-    }
-    else {
+    } else {
         // SO_RCVTIMEO timeout set for recv()
         useSelect = 0;
     }
@@ -155,13 +152,10 @@ static void ReceiveThreadProc(void* context) {
             Limelog("Audio Receive: recvUdpSocket() failed: %d\n", (int)LastSocketError());
             ListenerCallbacks.connectionTerminated(LastSocketFail());
             break;
-        }
-        else if (packet->size == 0) {
+        } else if (packet->size == 0) {
             // Receive timed out; try again
-            
-            if (!receivedDataFromPeer) {
-                waitingForAudioMs += UDP_RECV_POLL_TIMEOUT_MS;
-            }
+
+            if (!receivedDataFromPeer) { waitingForAudioMs += UDP_RECV_POLL_TIMEOUT_MS; }
 
             // If we hit this path, there are no queued audio packets on the host PC,
             // so we don't need to drop anything.
@@ -197,8 +191,8 @@ static void ReceiveThreadProc(void* context) {
 
         // Convert fields to host byte-order
         rtp->sequenceNumber = htons(rtp->sequenceNumber);
-        rtp->timestamp = htonl(rtp->timestamp);
-        rtp->ssrc = htonl(rtp->ssrc);
+        rtp->timestamp      = htonl(rtp->timestamp);
+        rtp->ssrc           = htonl(rtp->ssrc);
 
         queueStatus = RtpqAddPacket(&rtpReorderQueue, (PRTP_PACKET)packet, &packet->q.rentry);
         if (RTPQ_HANDLE_NOW(queueStatus)) {
@@ -207,12 +201,10 @@ static void ReceiveThreadProc(void* context) {
                     // An exit signal was received
                     break;
                 }
-            }
-            else {
+            } else {
                 decodeInputData(packet);
             }
-        }
-        else {
+        } else {
             if (RTPQ_PACKET_CONSUMED(queueStatus)) {
                 // The queue consumed our packet, so we must allocate a new one
                 packet = NULL;
@@ -226,32 +218,27 @@ static void ReceiveThreadProc(void* context) {
                             // An exit signal was received
                             break;
                         }
-                    }
-                    else {
+                    } else {
                         decodeInputData(packet);
                         free(packet);
                     }
                 }
-                
+
                 // Break on exit
-                if (packet != NULL) {
-                    break;
-                }
+                if (packet != NULL) { break; }
             }
         }
     }
-    
-    if (packet != NULL) {
-        free(packet);
-    }
+
+    if (packet != NULL) { free(packet); }
 }
 
-static void DecoderThreadProc(void* context) {
-    int err;
+static void DecoderThreadProc(void *context) {
+    int                  err;
     PQUEUED_AUDIO_PACKET packet;
 
     while (!PltIsThreadInterrupted(&decoderThread)) {
-        err = LbqWaitForQueueElement(&packetQueue, (void**)&packet);
+        err = LbqWaitForQueueElement(&packetQueue, (void **)&packet);
         if (err != LBQ_SUCCESS) {
             // An exit signal was received
             return;
@@ -264,32 +251,26 @@ static void DecoderThreadProc(void* context) {
 }
 
 void stopAudioStream(void) {
-    if (!receivedDataFromPeer) {
-        Limelog("No audio traffic was ever received from the host!\n");
-    }
+    if (!receivedDataFromPeer) { Limelog("No audio traffic was ever received from the host!\n"); }
 
     AudioCallbacks.stop();
 
     PltInterruptThread(&udpPingThread);
     PltInterruptThread(&receiveThread);
-    if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {        
+    if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
         // Signal threads waiting on the LBQ
         LbqSignalQueueShutdown(&packetQueue);
         PltInterruptThread(&decoderThread);
     }
-    
+
     PltJoinThread(&udpPingThread);
     PltJoinThread(&receiveThread);
-    if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
-        PltJoinThread(&decoderThread);
-    }
+    if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) { PltJoinThread(&decoderThread); }
 
     PltCloseThread(&udpPingThread);
     PltCloseThread(&receiveThread);
-    if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
-        PltCloseThread(&decoderThread);
-    }
-    
+    if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) { PltCloseThread(&decoderThread); }
+
     if (rtpSocket != INVALID_SOCKET) {
         closeSocket(rtpSocket);
         rtpSocket = INVALID_SOCKET;
@@ -298,8 +279,8 @@ void stopAudioStream(void) {
     AudioCallbacks.cleanup();
 }
 
-int startAudioStream(void* audioContext, int arFlags) {
-    int err;
+int startAudioStream(void *audioContext, int arFlags) {
+    int                            err;
     OPUS_MULTISTREAM_CONFIGURATION chosenConfig;
 
     if (HighQualitySurroundEnabled) {
@@ -307,8 +288,7 @@ int startAudioStream(void* audioContext, int arFlags) {
         LC_ASSERT(HighQualityOpusConfig.channelCount != 0);
         LC_ASSERT(HighQualityOpusConfig.streams != 0);
         chosenConfig = HighQualityOpusConfig;
-    }
-    else {
+    } else {
         LC_ASSERT(NormalQualityOpusConfig.channelCount != 0);
         LC_ASSERT(NormalQualityOpusConfig.streams != 0);
         chosenConfig = NormalQualityOpusConfig;
@@ -317,9 +297,7 @@ int startAudioStream(void* audioContext, int arFlags) {
     chosenConfig.samplesPerFrame = 48 * AudioPacketDuration;
 
     err = AudioCallbacks.init(StreamConfig.audioConfiguration, &chosenConfig, audioContext, arFlags);
-    if (err != 0) {
-        return err;
-    }
+    if (err != 0) { return err; }
 
     rtpSocket = bindUdpSocket(RemoteAddr.ss_family, RTP_RECV_BUFFER);
     if (rtpSocket == INVALID_SOCKET) {
@@ -365,13 +343,9 @@ int startAudioStream(void* audioContext, int arFlags) {
             PltInterruptThread(&decoderThread);
         }
         PltJoinThread(&receiveThread);
-        if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
-            PltJoinThread(&decoderThread);
-        }
+        if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) { PltJoinThread(&decoderThread); }
         PltCloseThread(&receiveThread);
-        if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
-            PltCloseThread(&decoderThread);
-        }
+        if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) { PltCloseThread(&decoderThread); }
         closeSocket(rtpSocket);
         AudioCallbacks.cleanup();
         return err;

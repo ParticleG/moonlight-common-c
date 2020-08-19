@@ -1,48 +1,47 @@
 #include "Limelight-internal.h"
 #include "Platform.h"
 
-static int stage = STAGE_NONE;
+static int                              stage = STAGE_NONE;
 static ConnListenerConnectionTerminated originalTerminationCallback;
-static int alreadyTerminated;
-static PLT_THREAD terminationCallbackThread;
-static int terminationCallbackErrorCode;
+static int                              alreadyTerminated;
+static PLT_THREAD                       terminationCallbackThread;
+static int                              terminationCallbackErrorCode;
 
 // Common globals
-char* RemoteAddrString;
-struct sockaddr_storage RemoteAddr;
-SOCKADDR_LEN RemoteAddrLen;
-int AppVersionQuad[4];
-STREAM_CONFIGURATION StreamConfig;
-CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
-DECODER_RENDERER_CALLBACKS VideoCallbacks;
-AUDIO_RENDERER_CALLBACKS AudioCallbacks;
-int NegotiatedVideoFormat;
-volatile int ConnectionInterrupted;
-int HighQualitySurroundSupported;
-int HighQualitySurroundEnabled;
+char *                         RemoteAddrString;
+struct sockaddr_storage        RemoteAddr;
+SOCKADDR_LEN                   RemoteAddrLen;
+int                            AppVersionQuad[4];
+STREAM_CONFIGURATION           StreamConfig;
+CONNECTION_LISTENER_CALLBACKS  ListenerCallbacks;
+SERVER_INFORMATION             ServerInfo;
+DECODER_RENDERER_CALLBACKS     VideoCallbacks;
+AUDIO_RENDERER_CALLBACKS       AudioCallbacks;
+int                            NegotiatedVideoFormat;
+volatile int                   ConnectionInterrupted;
+int                            HighQualitySurroundSupported;
+int                            HighQualitySurroundEnabled;
 OPUS_MULTISTREAM_CONFIGURATION NormalQualityOpusConfig;
 OPUS_MULTISTREAM_CONFIGURATION HighQualityOpusConfig;
-int OriginalVideoBitrate;
-int AudioPacketDuration;
+int                            OriginalVideoBitrate;
+int                            AudioPacketDuration;
 
 // Connection stages
-static const char* stageNames[STAGE_MAX] = {
-    "none",
-    "platform initialization",
-    "name resolution",
-    "RTSP handshake",
-    "control stream initialization",
-    "video stream initialization",
-    "audio stream initialization",
-    "input stream initialization",
-    "control stream establishment",
-    "video stream establishment",
-    "audio stream establishment",
-    "input stream establishment"
-};
+static const char *stageNames[STAGE_MAX] = {"none",
+                                            "platform initialization",
+                                            "name resolution",
+                                            "RTSP handshake",
+                                            "control stream initialization",
+                                            "video stream initialization",
+                                            "audio stream initialization",
+                                            "input stream initialization",
+                                            "control stream establishment",
+                                            "video stream establishment",
+                                            "audio stream establishment",
+                                            "input stream establishment"};
 
 // Get the name of the current stage based on its number
-const char* LiGetStageName(int stage) {
+const char *LiGetStageName(int stage) {
     return stageNames[stage];
 }
 
@@ -124,15 +123,14 @@ void LiStopConnection(void) {
         Limelog("done\n");
     }
     LC_ASSERT(stage == STAGE_NONE);
-    
+
     if (RemoteAddrString != NULL) {
         free(RemoteAddrString);
         RemoteAddrString = NULL;
     }
 }
 
-static void terminationCallbackThreadFunc(void* context)
-{
+static void terminationCallbackThreadFunc(void *context) {
     // Invoke the client's termination callback
     originalTerminationCallback(terminationCallbackErrorCode);
 }
@@ -143,17 +141,14 @@ static void terminationCallbackThreadFunc(void* context)
 // calls LiStopConnection() in the callback when the cleanup code
 // attempts to join the thread that the termination callback (and LiStopConnection)
 // is running on.
-static void ClInternalConnectionTerminated(int errorCode)
-{
+static void ClInternalConnectionTerminated(int errorCode) {
     int err;
 
     // Avoid recursion and issuing multiple callbacks
-    if (alreadyTerminated || ConnectionInterrupted) {
-        return;
-    }
+    if (alreadyTerminated || ConnectionInterrupted) { return; }
 
     terminationCallbackErrorCode = errorCode;
-    alreadyTerminated = 1;
+    alreadyTerminated            = 1;
 
     // Invoke the termination callback on a separate thread
     err = PltCreateThread("AsyncTerm", terminationCallbackThreadFunc, NULL, &terminationCallbackThread);
@@ -168,9 +163,15 @@ static void ClInternalConnectionTerminated(int errorCode)
 }
 
 // Starts the connection to the streaming machine
-int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION streamConfig, PCONNECTION_LISTENER_CALLBACKS clCallbacks,
-    PDECODER_RENDERER_CALLBACKS drCallbacks, PAUDIO_RENDERER_CALLBACKS arCallbacks, void* renderContext, int drFlags,
-    void* audioContext, int arFlags) {
+int LiStartConnection(PSERVER_INFORMATION            serverInfo,
+                      PSTREAM_CONFIGURATION          streamConfig,
+                      PCONNECTION_LISTENER_CALLBACKS clCallbacks,
+                      PDECODER_RENDERER_CALLBACKS    drCallbacks,
+                      PAUDIO_RENDERER_CALLBACKS      arCallbacks,
+                      void *                         renderContext,
+                      int                            drFlags,
+                      void *                         audioContext,
+                      int                            arFlags) {
     int err;
 
     // Replace missing callbacks with placeholders
@@ -187,13 +188,13 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     ListenerCallbacks.connectionTerminated = ClInternalConnectionTerminated;
 
     NegotiatedVideoFormat = 0;
+    memcpy(&ServerInfo, serverInfo, sizeof(ServerInfo));
     memcpy(&StreamConfig, streamConfig, sizeof(StreamConfig));
     OriginalVideoBitrate = streamConfig->bitrate;
-    RemoteAddrString = strdup(serverInfo->address);
-    
+    RemoteAddrString     = strdup(serverInfo->address);
+
     // Validate the audio configuration
-    if (MAGIC_BYTE_FROM_AUDIO_CONFIG(StreamConfig.audioConfiguration) != 0xCA ||
-            CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) > AUDIO_CONFIGURATION_MAX_CHANNEL_COUNT) {
+    if (MAGIC_BYTE_FROM_AUDIO_CONFIG(StreamConfig.audioConfiguration) != 0xCA || CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) > AUDIO_CONFIGURATION_MAX_CHANNEL_COUNT) {
         Limelog("Invalid audio configuration specified\n");
         err = -1;
         goto Cleanup;
@@ -211,31 +212,27 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     // Height must not be odd or NVENC will fail to initialize
     if (StreamConfig.height & 0x1) {
-        Limelog("Encoder height must not be odd. Rounding %d to %d\n",
-                StreamConfig.height,
-                StreamConfig.height & ~0x1);
+        Limelog("Encoder height must not be odd. Rounding %d to %d\n", StreamConfig.height, StreamConfig.height & ~0x1);
         StreamConfig.height = StreamConfig.height & ~0x1;
     }
 
     // Dimensions over 4096 are only supported with HEVC on NVENC
-    if (!StreamConfig.supportsHevc &&
-            (StreamConfig.width > 4096 || StreamConfig.height > 4096)) {
+    if (!StreamConfig.supportsHevc && (StreamConfig.width > 4096 || StreamConfig.height > 4096)) {
         Limelog("WARNING: Streaming at resolutions above 4K using H.264 will likely fail! Trying anyway!\n");
     }
     // Dimensions over 8192 aren't supported at all (even on Turing)
     else if (StreamConfig.width > 8192 || StreamConfig.height > 8192) {
         Limelog("WARNING: Streaming at resolutions above 8K will likely fail! Trying anyway!\n");
     }
-    
+
     // Extract the appversion from the supplied string
-    if (extractVersionQuadFromString(serverInfo->serverInfoAppVersion,
-                                     AppVersionQuad) < 0) {
+    if (extractVersionQuadFromString(serverInfo->serverInfoAppVersion, AppVersionQuad) < 0) {
         Limelog("Invalid appversion string: %s\n", serverInfo->serverInfoAppVersion);
         err = -1;
         goto Cleanup;
     }
 
-    alreadyTerminated = 0;
+    alreadyTerminated     = 0;
     ConnectionInterrupted = 0;
 
     Limelog("Initializing platform...");
@@ -253,7 +250,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     Limelog("Resolving host name...");
     ListenerCallbacks.stageStarting(STAGE_NAME_RESOLUTION);
-    err = resolveHostName(serverInfo->address, AF_UNSPEC, 47984, &RemoteAddr, &RemoteAddrLen);
+    err = resolveHostName(serverInfo->address, AF_UNSPEC, serverInfo->portTcp0, &RemoteAddr, &RemoteAddrLen);
     if (err != 0) {
         Limelog("failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_NAME_RESOLUTION, err);
@@ -270,8 +267,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     if (StreamConfig.streamingRemotely == STREAM_CFG_AUTO) {
         if (isPrivateNetworkAddress(&RemoteAddr)) {
             StreamConfig.streamingRemotely = STREAM_CFG_LOCAL;
-        }
-        else {
+        } else {
             StreamConfig.streamingRemotely = STREAM_CFG_REMOTE;
 
             if (StreamConfig.packetSize > 1024) {
@@ -384,7 +380,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     LC_ASSERT(stage == STAGE_INPUT_STREAM_START);
     ListenerCallbacks.stageComplete(STAGE_INPUT_STREAM_START);
     Limelog("done\n");
-    
+
     // Wiggle the mouse a bit to wake the display up
     LiSendMouseMoveEvent(1, 1);
     PltSleepMs(10);

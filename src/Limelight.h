@@ -396,6 +396,24 @@ void LiInitializeConnectionCallbacks(PCONNECTION_LISTENER_CALLBACKS clCallbacks)
 
 
 typedef struct _SERVER_INFORMATION {
+    // BOTH(TCP/UDP) port used in streaming and infomation requests
+    uint32_t portBoth0;
+
+    // TCP port used in connection initiation and so on
+    uint32_t portTcp0;
+
+    // TCP port used in getting game list and so on
+    uint32_t portTcp1;
+
+    // UDP port used in video streaming
+    uint32_t portUdp0;
+
+    // UDP port used in control(mouse and keyboard) streaming
+    uint32_t portUdp1;
+
+    // UDP port used in audio streaming
+    uint32_t portUdp2;
+
     // Server host name or IP address in text form
     const char* address;
     
